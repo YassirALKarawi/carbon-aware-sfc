@@ -1,0 +1,4 @@
+"""Shared fixtures for carbon-aware-sfc tests."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

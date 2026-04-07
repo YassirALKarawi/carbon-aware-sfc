@@ -4,7 +4,7 @@
 
 ### L-CAVO & QL-CAVO Simulation Framework
 
-[![Paper](https://img.shields.io/badge/Paper-IEEE%20TGCN%202026-00629B?style=for-the-badge&logo=ieee&logoColor=white)](https://doi.org/)
+[![Paper](https://img.shields.io/badge/Paper-IEEE%20TGCN-00629B?style=for-the-badge&logo=ieee&logoColor=white)](#-citation)
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-2EA043?style=for-the-badge)](LICENSE)
 [![NumPy](https://img.shields.io/badge/NumPy-1.24+-013243?style=for-the-badge&logo=numpy&logoColor=white)](https://numpy.org/)
@@ -238,7 +238,8 @@ If you use this code in your research, please cite:
 
 <div align="center">
 
-**MIT License** — see [LICENSE](LICENSE) for details.
+**MIT License** (simulation code) — see [LICENSE](LICENSE) for details.<br>
+The manuscript is © 2026 the author and may not be redistributed without permission.
 
 Made with dedication at the University of Diyala
 
