@@ -43,21 +43,9 @@ Both algorithms are benchmarked against **six baselines** — MILP-OPT (offline 
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Carbon-Aware SFC Placement                   │
-├─────────────┬──────────────────┬────────────────────────────────┤
-│  Topologies │    Algorithms    │           Outputs              │
-│             │                  │                                │
-│  ● NSFNET   │  ● L-CAVO       │  ● 19 Publication Figures      │
-│    (14 node)│  ● QL-CAVO      │  ● CSV Summary Tables          │
-│  ● GÉANT    │  ● MILP-OPT     │  ● Sensitivity Analysis        │
-│    (23 node)│  ● Energy-aware  │  ● Pareto Frontiers            │
-│             │  ● Latency-aware │  ● Regional Placement Stats    │
-│             │  ● Carbon-greedy │  ● Runtime Benchmarks          │
-│             │  ● Random        │                                │
-└─────────────┴──────────────────┴────────────────────────────────┘
-```
+<p align="center">
+  <img src="figures/architecture.png" width="850"/>
+</p>
 
 ---
 
@@ -151,6 +139,42 @@ python lcavo_sim.py --topology NSFNET --load Medium --methods L-CAVO --skip-figu
   │ Carbon-greedy    │   ~12 %    │    ~11 %    │   ~10 %    │
   └──────────────────┴────────────┴─────────────┴────────────┘
 ```
+
+### Carbon Reduction vs Energy-Aware Baseline
+
+<p align="center">
+  <img src="figures/carbon_reduction.png" width="850"/>
+</p>
+
+### Regional Carbon Intensity Profiles
+
+<p align="center">
+  <img src="figures/carbon_profiles.png" width="850"/>
+</p>
+
+### SFC Acceptance Rate
+
+<p align="center">
+  <img src="figures/acceptance_rate.png" width="850"/>
+</p>
+
+### Cross-Topology Comparison
+
+<p align="center">
+  <img src="figures/cross_topology.png" width="850"/>
+</p>
+
+### V-Sensitivity Analysis
+
+<p align="center">
+  <img src="figures/v_sensitivity.png" width="850"/>
+</p>
+
+### End-to-End Delay CDF
+
+<p align="center">
+  <img src="figures/delay_cdf.png" width="850"/>
+</p>
 
 ### Decomposition of Carbon Savings
 
