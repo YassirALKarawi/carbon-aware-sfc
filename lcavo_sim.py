@@ -63,12 +63,12 @@ CG = "#007700"      # Latency-aware / Region A (green)
 CM = "#000000"      # MILP-OPT (black)
 CC = "#6600AA"      # Carbon-greedy (purple)
 CR = "#888888"      # Random (grey)
-CD = "#FF6600"      # DRL-CAVO (orange)
+CQ = "#FF6600"      # QL-CAVO (orange)
 
 # ---------------------------------------------------------------------------
 # Method definitions
 # ---------------------------------------------------------------------------
-DEFAULT_METHODS = ["L-CAVO", "DRL-CAVO", "Energy-aware", "Latency-aware", "Carbon-greedy", "Random"]
+DEFAULT_METHODS = ["L-CAVO", "QL-CAVO", "Energy-aware", "Latency-aware", "Carbon-greedy", "Random"]
 METHOD_ORDER = ["MILP-OPT", *DEFAULT_METHODS]
 
 plt.rcParams.update({"font.size": 10, "figure.dpi": 200, "savefig.bbox": "tight"})
@@ -376,7 +376,7 @@ def sc_rf(n, c, st, reg, ci, pd):
 
 
 # =====================================================================
-#  Q-Learning Agent (QL-CAVO / DRL-CAVO)
+#  Q-Learning Agent (QL-CAVO)
 # =====================================================================
 
 class QAgent:
@@ -434,7 +434,7 @@ class QAgent:
         return w
 
 
-def sc_drl(agent, hour, ci_dict, Qt):
+def sc_ql(agent, hour, ci_dict, Qt):
     mc = np.mean(list(ci_dict.values()))
     a = agent.act(hour, mc, Qt)
     rw = agent.weights(a)
@@ -525,6 +525,158 @@ def milp_opt(G, reqs, np0, lp0, reg, ci, tlim=30):
 
 
 # =====================================================================
+#  Benders Decomposition (real iteration log for fig22)
+# =====================================================================
+
+def milp_benders(G, reqs, np0, lp0, reg, ci, max_iter=8, tlim=15, tol=0.5):
+    """Solve MILP-OPT iteratively via a lightweight Benders-style scheme.
+
+    Master  : LP relaxation of the full assignment problem on the *current*
+              allowed-server set, gives a lower bound.
+    Sub     : restricted integer MILP on the master's most-loaded servers,
+              gives an upper bound (a feasible integer placement).
+    Cut     : forbid the master's least-loaded active server in the next
+              iteration, tightening the bound.
+
+    Returns ``(res, st, iter_log)`` where ``iter_log`` is a list of
+    ``(iteration, lower_bound, upper_bound, gap_percent)`` tuples — the
+    real convergence trace used for fig22 (no fabricated decay).
+    """
+    iter_log = []
+    if not reqs or not HAS_PULP:
+        res, st = place(G, reqs, np0, lp0, reg, ci, sc_ea)
+        return res, st, iter_log
+
+    N_all = list(G.nodes())
+    forbidden: set = set()
+    UB = float("inf")
+    LB = 0.0
+    best_x_int = None
+    best_a_int = None
+
+    for it in range(1, max_iter + 1):
+        N_ok = [n for n in N_all if n not in forbidden]
+        if len(N_ok) < 2:
+            break
+
+        # ---- Master: LP relaxation, gives LB -------------------------
+        m = pulp.LpProblem(f"benders_master_{it}", pulp.LpMinimize)
+        xL = {(r, k, n): pulp.LpVariable(f"xL_{r}_{k}_{n}_{it}", lowBound=0, upBound=1)
+              for r in range(len(reqs)) for k in range(reqs[r]["K"]) for n in N_ok}
+        aL = {r: pulp.LpVariable(f"aL_{r}_{it}", lowBound=0, upBound=1) for r in range(len(reqs))}
+        zL = {n: pulp.LpVariable(f"zL_{n}_{it}", lowBound=0, upBound=1) for n in N_ok}
+        obj_m = []
+        for n in N_ok:
+            ld = pulp.lpSum(reqs[r]["cpu"][k] * xL[r, k, n] for r in range(len(reqs)) for k in range(reqs[r]["K"]))
+            un = ld / np0[n]["C"]
+            pw_n = np0[n]["Pi"] * zL[n] + (np0[n]["Pm"] - np0[n]["Pi"]) * un
+            obj_m.append(PUE * pw_n / 1000 * ci[reg[n]])
+        obj_m += [LAM_R * (1 - aL[r]) for r in range(len(reqs))]
+        m += pulp.lpSum(obj_m)
+        for r in range(len(reqs)):
+            for k in range(reqs[r]["K"]):
+                m += pulp.lpSum(xL[r, k, n] for n in N_ok) == aL[r]
+        for n in N_ok:
+            m += pulp.lpSum(reqs[r]["cpu"][k] * xL[r, k, n] for r in range(len(reqs)) for k in range(reqs[r]["K"])) <= np0[n]["C"]
+            for r in range(len(reqs)):
+                for k in range(reqs[r]["K"]):
+                    m += zL[n] >= xL[r, k, n]
+        m.solve(pulp.PULP_CBC_CMD(timeLimit=tlim, msg=0))
+        if m.status <= 0:
+            break
+        LB = max(LB, float(pulp.value(m.objective)))
+
+        # ---- Subproblem: restricted integer MILP, gives UB -----------
+        load_hint = {
+            n: sum(reqs[r]["cpu"][k] * xL[r, k, n].varValue
+                   for r in range(len(reqs)) for k in range(reqs[r]["K"]))
+            for n in N_ok
+        }
+        # Keep servers the LP wants to use
+        N_active = [n for n in N_ok if load_hint[n] > 1e-3] or N_ok[: max(3, len(N_ok) // 2)]
+
+        s = pulp.LpProblem(f"benders_sub_{it}", pulp.LpMinimize)
+        xI = {(r, k, n): pulp.LpVariable(f"xI_{r}_{k}_{n}_{it}", cat="Binary")
+              for r in range(len(reqs)) for k in range(reqs[r]["K"]) for n in N_active}
+        aI = {r: pulp.LpVariable(f"aI_{r}_{it}", cat="Binary") for r in range(len(reqs))}
+        zI = {n: pulp.LpVariable(f"zI_{n}_{it}", cat="Binary") for n in N_active}
+        obj_s = []
+        for n in N_active:
+            ld = pulp.lpSum(reqs[r]["cpu"][k] * xI[r, k, n] for r in range(len(reqs)) for k in range(reqs[r]["K"]))
+            un = ld / np0[n]["C"]
+            pw_n = np0[n]["Pi"] * zI[n] + (np0[n]["Pm"] - np0[n]["Pi"]) * un
+            obj_s.append(PUE * pw_n / 1000 * ci[reg[n]])
+        obj_s += [LAM_R * (1 - aI[r]) for r in range(len(reqs))]
+        s += pulp.lpSum(obj_s)
+        for r in range(len(reqs)):
+            for k in range(reqs[r]["K"]):
+                s += pulp.lpSum(xI[r, k, n] for n in N_active) == aI[r]
+        for n in N_active:
+            s += pulp.lpSum(reqs[r]["cpu"][k] * xI[r, k, n] for r in range(len(reqs)) for k in range(reqs[r]["K"])) <= np0[n]["C"]
+            for r in range(len(reqs)):
+                for k in range(reqs[r]["K"]):
+                    s += zI[n] >= xI[r, k, n]
+        s.solve(pulp.PULP_CBC_CMD(timeLimit=tlim, msg=0, gapRel=0.01))
+        if s.status > 0:
+            ub_now = float(pulp.value(s.objective))
+            if ub_now < UB:
+                UB = ub_now
+                best_x_int = {(r, k, n): xI[r, k, n].varValue for r, k, n in xI}
+                best_a_int = {r: aI[r].varValue for r in aI}
+                best_N = list(N_active)
+
+        gap = (UB - LB) / max(UB, 1e-6) * 100 if UB < float("inf") else 100.0
+        iter_log.append((it, LB, UB, gap))
+        if gap < tol:
+            break
+
+        # ---- Cut: forbid least-loaded active server ------------------
+        if N_active:
+            least = min(N_active, key=lambda n: load_hint.get(n, 0.0))
+            forbidden.add(least)
+
+    # ---- Materialise the best integer solution as a placement -------
+    st = SS(G, np0, lp0)
+    res = []
+    if best_x_int is None or best_a_int is None:
+        res, st = place(G, reqs, np0, lp0, reg, ci, sc_ea)
+        return res, st, iter_log
+
+    for r in range(len(reqs)):
+        if best_a_int.get(r) and best_a_int[r] > 0.5:
+            pl = []
+            for k in range(reqs[r]["K"]):
+                placed = None
+                for n in best_N:
+                    if best_x_int.get((r, k, n), 0) and best_x_int[(r, k, n)] > 0.5:
+                        placed = n; break
+                pl.append(placed if placed is not None else best_N[0])
+            allok = True
+            td = reqs[r]["pd"]
+            pths = []
+            cur = reqs[r]["s"]
+            for k, nd in enumerate(pl):
+                if not st.ok(nd, reqs[r]["cpu"][k]):
+                    allok = False; break
+                p = st.fp(cur, nd, reqs[r]["bw"])
+                if not p:
+                    allok = False; break
+                td += st.pd(p)
+                st.rbw(p, reqs[r]["bw"])
+                st.put(nd, reqs[r]["cpu"][k])
+                pths.append(p); cur = nd
+            if allok:
+                fp2 = st.fp(cur, reqs[r]["q"], reqs[r]["bw"])
+                if fp2 and td + st.pd(fp2) <= reqs[r]["Dmax"]:
+                    st.rbw(fp2, reqs[r]["bw"])
+                    td += st.pd(fp2)
+                    res.append({"ok": True, "pl": pl, "d": td, "pths": pths + [fp2]})
+                    continue
+        res.append({"ok": False, "pl": [], "d": 0, "pths": []})
+    return res, st, iter_log
+
+
+# =====================================================================
 #  Metrics Collection
 # =====================================================================
 
@@ -570,7 +722,7 @@ def sim(topo, load, meth, ns, V=V0, eps=EPS0, sigma=1.0, milp_on=True):
         Qt = 0.0
         slots = []
         agent = None
-        if meth == "DRL-CAVO":
+        if meth == "QL-CAVO":
             agent = QAgent(seed=SEED0 + si * 137 + 3)
             agent.pretrain(cp)
         for t in range(T):
@@ -581,8 +733,8 @@ def sim(topo, load, meth, ns, V=V0, eps=EPS0, sigma=1.0, milp_on=True):
                 res, st = milp_opt(G, reqs, np0, lp0, reg, ci)
             elif meth == "L-CAVO":
                 res, st = place(G, reqs, np0, lp0, reg, ci, sc_lc(V, Qt))
-            elif meth == "DRL-CAVO":
-                scorer, act, mc = sc_drl(agent, t, ci, Qt)
+            elif meth == "QL-CAVO":
+                scorer, act, mc = sc_ql(agent, t, ci, Qt)
                 res, st = place(G, reqs, np0, lp0, reg, ci, scorer)
             elif meth == "Energy-aware":
                 res, st = place(G, reqs, np0, lp0, reg, ci, sc_ea)
@@ -597,11 +749,11 @@ def sim(topo, load, meth, ns, V=V0, eps=EPS0, sigma=1.0, milp_on=True):
             m["rt"] = rt
             m["t"] = t
             m["Qt"] = Qt
-            if meth in ("L-CAVO", "DRL-CAVO"):
+            if meth in ("L-CAVO", "QL-CAVO"):
                 rej = m["ntot"] - m["nadm"]
                 Qt = max(Qt + rej - eps * m["ntot"], 0)
                 m["Qt"] = Qt
-                if meth == "DRL-CAVO" and agent and t < T - 1:
+                if meth == "QL-CAVO" and agent and t < T - 1:
                     ci2 = {r: cp[r][(t + 1) % T] for r in cp}
                     mc2 = np.mean(list(ci2.values()))
                     rew = -m["carbon"] / 100 + 0.5 * (m["accept"] / 100)
@@ -687,7 +839,7 @@ def generate_figures(DB, ns, fig_dir: Path):
     sv("fig07_carbon_profiles.pdf")
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    for mi, (m, c, lb) in enumerate([("MILP-OPT", CM, "MILP-OPT"), ("L-CAVO", CL, "L-CAVO"), ("DRL-CAVO", CD, "DRL-CAVO"), ("Carbon-greedy", CC, "Carbon-greedy")]):
+    for mi, (m, c, lb) in enumerate([("MILP-OPT", CM, "MILP-OPT"), ("L-CAVO", CL, "L-CAVO"), ("QL-CAVO", CQ, "QL-CAVO"), ("Carbon-greedy", CC, "Carbon-greedy")]):
         vs = []
         for l in ["Low", "Medium", "High"]:
             ke = (tp, l, "Energy-aware")
@@ -725,7 +877,7 @@ def generate_figures(DB, ns, fig_dir: Path):
     sv("fig09_reduction_vs_LA.pdf")
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    for m, c, s, lb in [("L-CAVO", CL, "-", "L-CAVO"), ("DRL-CAVO", CD, "-.", "DRL-CAVO"), ("Energy-aware", CE, "--", "EA"), ("Latency-aware", CG, ":", "LA"), ("MILP-OPT", CM, "-.", "MILP")]:
+    for m, c, s, lb in [("L-CAVO", CL, "-", "L-CAVO"), ("QL-CAVO", CQ, "-.", "QL-CAVO"), ("Energy-aware", CE, "--", "EA"), ("Latency-aware", CG, ":", "LA"), ("MILP-OPT", CM, "-.", "MILP")]:
         k = (tp, ld, m)
         if k in DB:
             ax.plot(range(24), agg(DB[k], "carbon"), s, color=c, lw=2, label=lb)
@@ -908,11 +1060,25 @@ def generate_figures(DB, ns, fig_dir: Path):
     ax.grid(True, alpha=0.3)
     sv("fig21_queue.pdf")
 
+    # fig22: REAL Benders convergence (lcavo_sim.milp_benders), not a synthetic decay
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    for ld2, c, s, lb in [("Low", CG, ":", "Low"), ("Medium", CE, "--", "Med"), ("High", CL, "-", "High")]:
-        bg = {"Low": 15, "Medium": 19, "High": 23}[ld2]
-        itr = range(1, 9)
-        ax.plot(list(itr), [bg * np.exp(-0.55 * i) for i in itr], s, color=c, lw=2, marker="o", ms=4, label=lb)
+    if HAS_PULP:
+        G_b, reg_b, edge_b, _ = TOPOS["NSFNET"]()
+        cp_b = carbon_prof()
+        for ld2, c, s in [("Low", CG, ":"), ("Medium", CE, "--"), ("High", CL, "-")]:
+            rng_b = np.random.default_rng(SEED0)
+            np_b = _np(G_b, np.random.default_rng(SEED0 + 1))
+            lp_b = _lp(G_b, np.random.default_rng(SEED0 + 2))
+            reqs_b = gen_reqs(edge_b, LOADS["NSFNET"][ld2], rng_b)
+            ci_b = {r: cp_b[r][12] for r in cp_b}
+            _, _, log_b = milp_benders(G_b, reqs_b, np_b, lp_b, reg_b, ci_b)
+            if log_b:
+                xs = [row[0] for row in log_b]
+                ys = [row[3] for row in log_b]
+                ax.plot(xs, ys, s, color=c, lw=2, marker="o", ms=4, label=ld2)
+    else:
+        ax.text(0.5, 0.5, "PuLP not installed — Benders log unavailable",
+                ha="center", va="center", transform=ax.transAxes)
     ax.set(xlabel="Benders iteration", ylabel="Gap (%)")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)

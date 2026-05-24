@@ -7,6 +7,11 @@ def test_lcavo_completes():
     result = sim("NSFNET", "Low", "L-CAVO", ns=1)
     assert result is not None
 
+def test_qlcavo_completes():
+    """QL-CAVO should complete on small run (paper's Q-learning method)."""
+    result = sim("NSFNET", "Low", "QL-CAVO", ns=1)
+    assert result is not None
+
 def test_random_completes():
     """Random baseline should complete."""
     result = sim("NSFNET", "Low", "Random", ns=1)
