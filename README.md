@@ -96,6 +96,25 @@ L-CAVO transforms the long-term carbon-minimisation problem into a sequence of *
 > [!TIP]
 > As `V` increases, the algorithm prioritises carbon reduction more aggressively. The theoretical optimality gap decreases as **O(1/V)**.
 
+**Algorithm 1 — L-CAVO (paper §VI):**
+
+```text
+Inputs : V ≥ 0, ε ∈ (0,1), carbon trace {g_z(t)}, topology G
+Init   : Q(0) ← 0
+for each slot t = 0, 1, …, T−1 do
+    1. Observe regional carbon intensities g_z(t) and request set R_t
+    2. for each request r ∈ R_t do
+           for each VNF k = 1..K_r do
+               score(n) ← V·ΔCO₂(n) + 0.5·delay(n) + 0.3·util(n) + 0.05·Q(t)
+               n*  ← argmin_n score(n)          subject to CPU, bw, D_max
+           Place chain or mark request rejected
+    3. rej_t ← |R_t| − admitted_t
+    4. Q(t+1) ← max( Q(t) + rej_t − ε·|R_t|, 0 )       ▷ virtual-queue update
+end for
+```
+
+> Code reference: `sc_lc()` (lcavo_sim.py:343) and the L-CAVO branch of `sim()` (lcavo_sim.py:582).
+
 ```mermaid
 flowchart TD
     S[New time-slot t] --> Q[Read virtual queue Q t]
