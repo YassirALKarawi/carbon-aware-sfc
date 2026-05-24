@@ -154,12 +154,17 @@ def build_output_paths(base_dir: str | Path) -> tuple[Path, Path, Path]:
 #  Carbon Intensity & Infrastructure Profiles
 # =====================================================================
 
-def carbon_prof(sigma=1.0):
-    """Generate 24-hour carbon intensity profiles for regions A–D.
+def carbon_prof(sigma: float = 1.0) -> dict[str, np.ndarray]:
+    """Generate 24-hour carbon-intensity profiles for grid regions A–D.
 
-    Each region has a distinct base intensity modulated by a cosine
-    diurnal pattern. The ``sigma`` parameter controls how spread
-    the regional profiles are from the global mean.
+    Each region has a distinct base intensity modulated by a cosine diurnal
+    pattern. ``sigma`` scales how far the regional profiles are pulled away
+    from (``sigma>1``) or pushed toward (``sigma<1``) the global mean, so
+    ``sigma=0`` collapses all regions onto a single curve.
+
+    Returns:
+        Mapping ``{region -> ndarray of length 24}`` in gCO₂eq/kWh,
+        clipped to the documented [10, 900] envelope.
     """
     h = np.arange(T)
     w = np.cos((h - 12) * np.pi / 12)
@@ -190,8 +195,18 @@ def _lp(G, rng):
     return p
 
 
-def gen_reqs(edge, lam, rng):
-    """Generate SFC requests via Poisson arrival with random VNF chains."""
+def gen_reqs(edge: Sequence[int], lam: float, rng: np.random.Generator) -> list[dict]:
+    """Generate SFC requests via Poisson arrivals with random VNF chains.
+
+    Args:
+        edge: Set of edge nodes eligible as source/destination.
+        lam:  Poisson rate (mean number of arrivals in this slot).
+        rng:  Numpy ``Generator`` used for every random draw (reproducibility).
+
+    Returns:
+        List of request dicts with the six fields ``s, q, K, cpu, bw, Dmax``
+        (paper §V-B) plus the per-chain processing delay ``pd = 0.4·K``.
+    """
     n = rng.poisson(lam)
     reqs = []
     for _ in range(n):
@@ -528,7 +543,14 @@ def milp_opt(G, reqs, np0, lp0, reg, ci, tlim=30):
 #  Metrics Collection
 # =====================================================================
 
-def metrics(res, reqs, st, reg, ci, np0):
+def metrics(res, reqs, st, reg, ci, np0) -> dict:
+    """Aggregate per-slot performance metrics from a placement result.
+
+    Returns a dict with carbon (gCO₂eq), power (W), mean delay (ms),
+    acceptance rate (%), active-node count, per-region placement share
+    (``rpct``), admission counts (``nadm``/``ntot``), and the full
+    per-request delay list (``dlist``) used by the CDF figure.
+    """
     adm = sum(1 for r in res if r["ok"])
     tot = max(len(res), 1)
     dls = [r["d"] for r in res if r["ok"]]
@@ -557,8 +579,32 @@ def metrics(res, reqs, st, reg, ci, np0):
 #  Main Simulation Loop
 # =====================================================================
 
-def sim(topo, load, meth, ns, V=V0, eps=EPS0, sigma=1.0, milp_on=True):
-    """Run *ns* independent seeds for a single (topology, load, method) scenario."""
+def sim(
+    topo: str,
+    load: str,
+    meth: str,
+    ns: int,
+    V: float = V0,
+    eps: float = EPS0,
+    sigma: float = 1.0,
+    milp_on: bool = True,
+) -> list[list[dict]]:
+    """Run *ns* independent seeds for one (topology, load, method) scenario.
+
+    Args:
+        topo:    Topology key (``"NSFNET"`` or ``"GEANT"``).
+        load:    Load level (``"Low"``, ``"Medium"``, or ``"High"``).
+        meth:    Algorithm name from :data:`METHOD_ORDER`.
+        ns:      Number of independent seeds.
+        V:       L-CAVO drift-plus-penalty trade-off weight.
+        eps:     Allowable long-run rejection ratio used by the virtual queue.
+        sigma:   Carbon-profile spread multiplier (see :func:`carbon_prof`).
+        milp_on: Toggle the MILP-OPT baseline (no-op for other methods).
+
+    Returns:
+        List of length ``ns``; each element is a 24-slot list of per-slot
+        metric dicts (see :func:`metrics`).
+    """
     G, reg, edge, _ = TOPOS[topo]()
     lam = LOADS[topo][load]
     cp = carbon_prof(sigma)
