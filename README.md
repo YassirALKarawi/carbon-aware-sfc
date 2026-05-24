@@ -134,6 +134,44 @@ flowchart TD
     class R dec;
 ```
 
+**Algorithm 1 — L-CAVO (paper §VI):**
+
+```text
+Inputs : V ≥ 0, ε ∈ (0,1), carbon trace {g_z(t)}, topology G
+Init   : Q(0) ← 0
+for each slot t = 0, 1, …, T−1 do
+    1. Observe regional carbon intensities g_z(t) and request set R_t
+    2. for each request r ∈ R_t do
+           for each VNF k = 1..K_r do
+               score(n) ← V·ΔCO₂(n) + 0.5·delay(n) + 0.3·util(n) + 0.05·Q(t)
+               n*  ← argmin_n score(n)          subject to CPU, bw, D_max
+           Place chain, otherwise mark r as rejected
+    3. rej_t ← |R_t| − admitted_t
+    4. Q(t+1) ← max( Q(t) + rej_t − ε·|R_t|, 0 )       ▷ virtual-queue update
+end for
+```
+
+> Code reference: `sc_lc()` (`lcavo_sim.py:343`) and the L-CAVO branch of `sim()` (`lcavo_sim.py:582`).
+
+#### Benders decomposition (paper §VI-C)
+
+For the per-slot offline benchmark, MILP-OPT is also solved via a lightweight Benders-style refinement that produces a **real** convergence trace (used by `fig22_benders.pdf`):
+
+```text
+Inputs : current slot's requests R_t, allowed-server set N
+Init   : forbidden ← ∅,  UB ← +∞,  LB ← 0
+repeat for it = 1..K_max
+    Master   : LP relaxation of (x_{r,k,n}, a_r, z_n) over N\forbidden   → LB
+    Sub      : integer MILP restricted to servers the LP wants to use   → UB
+    gap      : (UB − LB) / UB
+    if gap < τ : stop
+    Cut      : forbidden ← forbidden ∪ {arg min_n  load_hint(n)}        ▷ Benders cut
+end repeat
+return best integer placement, iteration log [(it, LB, UB, gap)]
+```
+
+> Code reference: `milp_benders()` (`lcavo_sim.py:527`) and the fig22 generator (`lcavo_sim.py:1063`).
+
 ### 🔵 QL-CAVO — Q-Learning Carbon-Aware VNF Orchestration
 
 QL-CAVO uses a **tabular Q-learning agent** that learns which regions to favour at each time-of-day. The state space encodes `(hour, mean_carbon_intensity, queue_length)`, and actions correspond to region-preference weights.
@@ -152,6 +190,31 @@ flowchart LR
     classDef ql fill:#8B5CF6,stroke:#4C1D95,color:#fff,stroke-width:2px;
     class OBS,SEL,ACT,REW,UPD ql;
 ```
+
+**Algorithm 2 — QL-CAVO (paper §VII):**
+
+```text
+Inputs : learning rate α=0.15, discount γ=0.95, ε-greedy schedule 0.25→0.02,
+         historical carbon trace, topology G
+Init   : Q-table Q[6,4,3,4] ← 0     ▷ (hour × CI × queue) × action
+Pre-train (300 episodes on historical trace):
+    for each replayed slot t :
+        s ← (hour-bucket, CI-bucket, queue-bucket)
+        a ← argmax_a Q[s,a]  with prob 1-ε,  else random
+        r ← −CI(region_a) / 100
+        Q[s,a] ← Q[s,a] + α·( r + γ·max_a' Q[s',a'] − Q[s,a] )
+Online (simulation):
+    for each slot t :
+        s   ← discretise(hour, mean CI, virtual queue)
+        a   ← ε-greedy(s)         ▷ pick preferred region
+        w   ← weights(a)          ▷ region-preference vector
+        place VNFs greedily under w  (sc_ql)
+        r   ← −carbon(t)/100 + 0.5·acceptance(t)
+        Q[s,a] ← Q[s,a] + α·( r + γ·max_a' Q[s',a'] − Q[s,a] )
+        decay ε  (×0.995, floor 0.02)
+```
+
+> Code reference: `QAgent` (`lcavo_sim.py:382`) and `sc_ql()` (`lcavo_sim.py:437`).
 
 ---
 
@@ -275,31 +338,58 @@ L-CAVO achieves savings through **two complementary mechanisms**:
 
 ## 🖼️ Generated Figures
 
-The full simulation produces **19 publication-quality PDF figures**:
+The full simulation produces **19 publication-quality PDF figures**.
+
+### How to reproduce every figure
+
+A single run of `lcavo_sim.py` writes **all 19 figures** under `results/figures/`. Use the commands below to reproduce them in different fidelity modes (smoke run for review, full run for the paper).
+
+```bash
+# All 19 figures, paper-grade (30 seeds, ≈ 2 h on a modern workstation)
+python lcavo_sim.py --seeds 30
+
+# Same figures, smoke quality (3 seeds, ≈ 5 min) — recommended for review
+python lcavo_sim.py --quick
+
+# Reproduce only a subset of scenarios (figures still all generated,
+# but with whatever DB entries are available):
+python lcavo_sim.py --topology NSFNET --load Medium --methods L-CAVO,QL-CAVO,MILP-OPT
+
+# Tables only, no figures
+python lcavo_sim.py --skip-figures
+```
+
+> [!TIP]
+> To download the figures **without running the simulation locally**, use the
+> ["Build figures"](../../actions/workflows/figures.yml) GitHub Actions workflow:
+> push to your fork or click *Run workflow* and download `paper-figures` from the
+> run's artifacts. The workflow shells out to `python lcavo_sim.py --quick`.
+
+### Per-figure index (paper §VII)
 
 <div align="center">
 
-| #  | 📄 Figure                       | 📝 Description |
-|:--:|:--------------------------------|:---------------|
-| 7  | `fig07_carbon_profiles.pdf`     | Regional carbon intensity over 24 hours |
-| 8  | `fig08_reduction_vs_EA.pdf`     | Carbon reduction vs Energy-aware baseline |
-| 9  | `fig09_reduction_vs_LA.pdf`     | Carbon reduction vs Latency-aware baseline |
-| 10 | `fig10_hourly_carbon.pdf`       | Hourly carbon emissions by algorithm |
-| 11 | `fig11_cumulative.pdf`          | Cumulative carbon over the day |
-| 12 | `fig12_active_nodes.pdf`        | Active server count per slot |
-| 13 | `fig13_power.pdf`               | Power consumption over time |
-| 14 | `fig14_delay_cdf.pdf`           | End-to-end delay CDF |
-| 15 | `fig15_cross_topo.pdf`          | Cross-topology carbon comparison |
-| 16 | `fig16_V_sensitivity.pdf`       | `V` parameter sensitivity (carbon vs acceptance) |
-| 17 | `fig17_eps_sensitivity.pdf`     | `ε` parameter sensitivity |
-| 18 | `fig18_pareto.pdf`              | Carbon–delay Pareto frontier |
-| 19 | `fig19_regional.pdf`            | Regional VNF placement distribution |
-| 20 | `fig20_temporal_steering.pdf`   | Temporal steering toward clean regions |
-| 21 | `fig21_queue.pdf`               | Virtual queue `Q(t)` evolution |
-| 22 | `fig22_benders.pdf`             | Benders decomposition convergence |
-| 23 | `fig23_runtime.pdf`             | Runtime scaling (L-CAVO vs MILP) |
-| 24 | `fig24_variance.pdf`            | Sensitivity to carbon-intensity variance σ |
-| 25 | `fig25_opt_gap.pdf`             | Optimality gap vs `V` (O(1/V) bound) |
+| #  | 📄 Filename                     | 📝 Description                                       | Driver in `lcavo_sim.py` |
+|:--:|:--------------------------------|:-----------------------------------------------------|:-------------------------|
+| 7  | `fig07_carbon_profiles.pdf`     | Regional carbon intensity over 24 hours              | `carbon_prof()` |
+| 8  | `fig08_reduction_vs_EA.pdf`     | Carbon reduction vs Energy-aware baseline            | scenario sweep |
+| 9  | `fig09_reduction_vs_LA.pdf`     | Carbon reduction vs Latency-aware baseline           | scenario sweep |
+| 10 | `fig10_hourly_carbon.pdf`       | Hourly carbon emissions by algorithm                 | NSFNET / Medium |
+| 11 | `fig11_cumulative.pdf`          | Cumulative carbon over the day                       | NSFNET / Medium |
+| 12 | `fig12_active_nodes.pdf`        | Active server count per slot                         | NSFNET / Medium |
+| 13 | `fig13_power.pdf`               | Power consumption over time                          | NSFNET / Medium |
+| 14 | `fig14_delay_cdf.pdf`           | End-to-end delay CDF                                 | NSFNET / Medium |
+| 15 | `fig15_cross_topo.pdf`          | Cross-topology carbon comparison                     | NSFNET + GÉANT |
+| 16 | `fig16_V_sensitivity.pdf`       | `V` parameter sensitivity (carbon vs acceptance)     | `V ∈ {20,50,100,…}` |
+| 17 | `fig17_eps_sensitivity.pdf`     | `ε` parameter sensitivity                            | `ε ∈ {0.02,…,0.10}` |
+| 18 | `fig18_pareto.pdf`              | Carbon–delay Pareto frontier                         | `V` sweep |
+| 19 | `fig19_regional.pdf`            | Regional VNF placement distribution                  | per-method `rpct` |
+| 20 | `fig20_temporal_steering.pdf`   | Temporal steering toward clean regions               | hourly placement |
+| 21 | `fig21_queue.pdf`               | Virtual queue `Q(t)` evolution                       | L-CAVO @ several `V` |
+| 22 | `fig22_benders.pdf`             | **Real** Benders convergence trace per load          | `milp_benders()` |
+| 23 | `fig23_runtime.pdf`             | Runtime scaling (L-CAVO vs MILP)                     | per-topology `rt` |
+| 24 | `fig24_variance.pdf`            | Sensitivity to carbon-intensity variance σ           | `sigma ∈ [0.25, 2.0]` |
+| 25 | `fig25_opt_gap.pdf`             | Optimality gap vs `V` (O(1/V) bound)                 | `V` sweep |
 
 </div>
 
