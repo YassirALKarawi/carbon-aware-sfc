@@ -315,7 +315,7 @@ carbon-aware-sfc/
 | **Pandas**     | 2.2        | Tables & CSV export |
 | **NetworkX**   | ≥ 3.1      | Topology graphs |
 | **Matplotlib** | 3.9        | Publication figures |
-| **PuLP**       | 2.8        | MILP baseline |
+| **PuLP**       | 2.7        | MILP baseline |
 
 </div>
 

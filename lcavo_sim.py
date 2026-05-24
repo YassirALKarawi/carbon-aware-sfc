@@ -63,12 +63,12 @@ CG = "#007700"      # Latency-aware / Region A (green)
 CM = "#000000"      # MILP-OPT (black)
 CC = "#6600AA"      # Carbon-greedy (purple)
 CR = "#888888"      # Random (grey)
-CD = "#FF6600"      # DRL-CAVO (orange)
+CQ = "#FF6600"      # QL-CAVO (orange)
 
 # ---------------------------------------------------------------------------
 # Method definitions
 # ---------------------------------------------------------------------------
-DEFAULT_METHODS = ["L-CAVO", "DRL-CAVO", "Energy-aware", "Latency-aware", "Carbon-greedy", "Random"]
+DEFAULT_METHODS = ["L-CAVO", "QL-CAVO", "Energy-aware", "Latency-aware", "Carbon-greedy", "Random"]
 METHOD_ORDER = ["MILP-OPT", *DEFAULT_METHODS]
 
 plt.rcParams.update({"font.size": 10, "figure.dpi": 200, "savefig.bbox": "tight"})
@@ -376,7 +376,7 @@ def sc_rf(n, c, st, reg, ci, pd):
 
 
 # =====================================================================
-#  Q-Learning Agent (QL-CAVO / DRL-CAVO)
+#  Q-Learning Agent (QL-CAVO)
 # =====================================================================
 
 class QAgent:
@@ -434,7 +434,7 @@ class QAgent:
         return w
 
 
-def sc_drl(agent, hour, ci_dict, Qt):
+def sc_ql(agent, hour, ci_dict, Qt):
     mc = np.mean(list(ci_dict.values()))
     a = agent.act(hour, mc, Qt)
     rw = agent.weights(a)
@@ -570,7 +570,7 @@ def sim(topo, load, meth, ns, V=V0, eps=EPS0, sigma=1.0, milp_on=True):
         Qt = 0.0
         slots = []
         agent = None
-        if meth == "DRL-CAVO":
+        if meth == "QL-CAVO":
             agent = QAgent(seed=SEED0 + si * 137 + 3)
             agent.pretrain(cp)
         for t in range(T):
@@ -581,8 +581,8 @@ def sim(topo, load, meth, ns, V=V0, eps=EPS0, sigma=1.0, milp_on=True):
                 res, st = milp_opt(G, reqs, np0, lp0, reg, ci)
             elif meth == "L-CAVO":
                 res, st = place(G, reqs, np0, lp0, reg, ci, sc_lc(V, Qt))
-            elif meth == "DRL-CAVO":
-                scorer, act, mc = sc_drl(agent, t, ci, Qt)
+            elif meth == "QL-CAVO":
+                scorer, act, mc = sc_ql(agent, t, ci, Qt)
                 res, st = place(G, reqs, np0, lp0, reg, ci, scorer)
             elif meth == "Energy-aware":
                 res, st = place(G, reqs, np0, lp0, reg, ci, sc_ea)
@@ -597,11 +597,11 @@ def sim(topo, load, meth, ns, V=V0, eps=EPS0, sigma=1.0, milp_on=True):
             m["rt"] = rt
             m["t"] = t
             m["Qt"] = Qt
-            if meth in ("L-CAVO", "DRL-CAVO"):
+            if meth in ("L-CAVO", "QL-CAVO"):
                 rej = m["ntot"] - m["nadm"]
                 Qt = max(Qt + rej - eps * m["ntot"], 0)
                 m["Qt"] = Qt
-                if meth == "DRL-CAVO" and agent and t < T - 1:
+                if meth == "QL-CAVO" and agent and t < T - 1:
                     ci2 = {r: cp[r][(t + 1) % T] for r in cp}
                     mc2 = np.mean(list(ci2.values()))
                     rew = -m["carbon"] / 100 + 0.5 * (m["accept"] / 100)
@@ -687,7 +687,7 @@ def generate_figures(DB, ns, fig_dir: Path):
     sv("fig07_carbon_profiles.pdf")
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    for mi, (m, c, lb) in enumerate([("MILP-OPT", CM, "MILP-OPT"), ("L-CAVO", CL, "L-CAVO"), ("DRL-CAVO", CD, "DRL-CAVO"), ("Carbon-greedy", CC, "Carbon-greedy")]):
+    for mi, (m, c, lb) in enumerate([("MILP-OPT", CM, "MILP-OPT"), ("L-CAVO", CL, "L-CAVO"), ("QL-CAVO", CQ, "QL-CAVO"), ("Carbon-greedy", CC, "Carbon-greedy")]):
         vs = []
         for l in ["Low", "Medium", "High"]:
             ke = (tp, l, "Energy-aware")
@@ -725,7 +725,7 @@ def generate_figures(DB, ns, fig_dir: Path):
     sv("fig09_reduction_vs_LA.pdf")
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    for m, c, s, lb in [("L-CAVO", CL, "-", "L-CAVO"), ("DRL-CAVO", CD, "-.", "DRL-CAVO"), ("Energy-aware", CE, "--", "EA"), ("Latency-aware", CG, ":", "LA"), ("MILP-OPT", CM, "-.", "MILP")]:
+    for m, c, s, lb in [("L-CAVO", CL, "-", "L-CAVO"), ("QL-CAVO", CQ, "-.", "QL-CAVO"), ("Energy-aware", CE, "--", "EA"), ("Latency-aware", CG, ":", "LA"), ("MILP-OPT", CM, "-.", "MILP")]:
         k = (tp, ld, m)
         if k in DB:
             ax.plot(range(24), agg(DB[k], "carbon"), s, color=c, lw=2, label=lb)
